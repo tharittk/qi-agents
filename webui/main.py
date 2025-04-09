@@ -1,135 +1,117 @@
 import asyncio
-from typing import AsyncGenerator, NoReturn
+import re
 
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 from ollama import AsyncClient
 
-from agent.graph import create_graph, compile_workflow
-from langchain_core.messages.human import HumanMessage
-from langchain_core.messages import AIMessage
-
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
+from typing import AsyncGenerator, NoReturn
+
+from agent.graph import create_graph
+from langgraph.types import Command
+from langgraph.checkpoint.memory import MemorySaver
 
 from base64 import b64encode
-import re
-
-# Agent graph
-server = 'ollama'
-model = 'llama3-groq-8b:Q8'
-model_endpoint = None
-iterations = 10
-graph = create_graph(server=server, model=model, model_endpoint=model_endpoint)
-workflow = compile_workflow(graph)
-
 
 app = FastAPI()
+
 with open("./webui/index.html") as f:
     html = f.read()
 
+headers = {"Content-Type": "application/json"}
+model_endpoint = "http://localhost:11435/api/generate"
+temperature = 0
+# model = "llama3-groq-8b-Q8:latest"
+model = "gpt-4o"
+
+memory = MemorySaver()
+graph = create_graph(model=model, model_endpoint=model_endpoint)
+workflow = graph.compile(checkpointer=memory)
 
 
-# async def chat(message):
-#     messages = [{'role': 'user', 'content': f"{message}"}]
-    
-#     response = await AsyncClient().chat(
-#         model='llama3.1:8b',
-#         messages=messages, 
-#         stream=True,
-#         keep_alive="1m")
-    
-#     all_content = ""
-#     async for chunk in response:
-#         content = chunk['message']['content']
-#         if content:
-#             all_content += content
-#             yield all_content
+def print_workflow(event):
+    # print(event)    assert "__interrupt__" in event
+    content = event["__interrupt__"][0].value
+
+    print("Event from interrupt: ", event)
+
+    formatted = "> Review the following:\n"
+    formatted += "Agent will . . ."
+
+    for header in content:
+        tools = content[header]
+        for tool in tools:
+            if "tool_call" in tool and tool["tool_call"]:
+                fname = tool["tool_call"]["name"]
+                args = tool["tool_call"]["arguments"]
+                formatted += f"{fname} with {args} ==> "
+            # formatted += str(tool.values()) + "\n"
+    formatted += "[x]"
+    return formatted
+
 
 def get_image_binary(file_path):
 
     with open(file_path, "rb") as image_file:
-        image_data = b64encode(image_file.read()).decode('utf-8')
+        image_data = b64encode(image_file.read()).decode("utf-8")
         return image_data
 
-# With agent
 
-tool_pattern = r"<tool_call>\s*(.*?)\s*</tool_call>"
-img_pattern = r"<output_image>\s*(.*?)\s*</output_image>"
-
-# chat_interface_sys_prompt = '''
-# The user will give you the JSON of the functional call. 
-# As if you are executing the function, you have to phrase that what you are doing, 
-# and what parameter you are using. Keep it short.
-# "
-# '''
-
-async def chat(message, outputs):
+async def chat(message, websocket: WebSocket, thread_id):
 
     dict_inputs = {"user_query": message}
-    limit = {"recursion_limit": iterations}
 
-    streaming_content = ""
+    # Use new thread id to clear the chat history
+    thread = {"configurable": {"thread_id": str(thread_id)}}
 
-    async for event in workflow.astream(dict_inputs, limit, stream_mode="messages"):
-        #TODO: Langgraph is weird. The AI message is label with HumanMessage
-        # Probably due to type enforcement / annotation
+    async for event in workflow.astream(dict_inputs, thread, stream_mode="updates"):
 
-        msg = event[0]
-        if isinstance(msg, HumanMessage):
-            content = msg.content
-
-            if re.search(tool_pattern, content):
-                pass
-
-            elif re.search(img_pattern, content):
-                match = re.search(img_pattern, content)
-                # TODO: Any cleaner way than .png here.
-                outputs.append(match.group(1) + '.png')
-                pass
-
+        if "__interrupt__" in event:
+            formatted = print_workflow(event)
+            await websocket.send_text(formatted)
+            await websocket.send_text("Type `ok` if looks good: ")
+            feedback = await websocket.receive_text()
+            if "ok" in feedback.lower():
+                await workflow.ainvoke(
+                    Command(resume={"action": "continue", "data": None}), config=thread
+                )
             else:
-                continue
-            
-            content = content + "\n"
+                await workflow.ainvoke(
+                    Command(resume={"action": "reject", "data": None}),
+                    config=thread,
+                )
 
-            streaming_content += content
-            yield streaming_content
-        streaming_content += "\n"
+    # Process image output
+    state_hist = await workflow.aget_state(thread)
+    if "image_output" in state_hist.values:
+        image_name = state_hist.values["image_output"]
+        if image_name:
+            image_data = get_image_binary(image_name + ".png")
+            await websocket.send_text(f"data:image/png;base64,{image_data}")
 
 
-# TODO: Log file for historical user's query
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> NoReturn:
+async def websocket_endpoint(websocket: WebSocket) -> None:  # Changed NoReturn to None
     await websocket.accept()
+    thread_id = 1
     while True:
         client_msg = await websocket.receive_text()
-        log = open("./webui/user_log.txt", "a")
-        log.write(client_msg + '\n')
-        log.close()
-        outputs = []
-        async for text in chat(client_msg, outputs):
-            #print("Text send: ", text)
-            await websocket.send_text(text)
 
-        if outputs:
-            image_data = get_image_binary(outputs[0])
-            await websocket.send_text(f"data:image/png;base64,{image_data}")
+        await chat(client_msg, websocket, thread_id)
+
+        thread_id += 1
+
 
 @app.get("/")
 async def web_app() -> HTMLResponse:
     return HTMLResponse(html)
 
 
-def main():
-    asyncio.run(chat())
-
-# Port fowarding : $ ssh -L 8000:localhost:8000 tharitt@corp-l-ws73
 if __name__ == "__main__":
-    uvicorn.run(
-        "webui.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
+# uvicorn webui.main:app --reload

@@ -1,41 +1,74 @@
-from agent.state import AgentGraphState
+from typing import TypedDict
+
 from agent.ollama_models import OllamaModel
+from agent.gpt_models import GPTModel
 from agent.prompts import (
-    retriever_prompt_template,
+    generate_retriever_sys_prompt,
     generate_insitu_sys_prompt,
-    generate_fluid_sub_sys_prompt
+    generate_fluid_sub_sys_prompt,
 )
 from qi.qi_lang import parse_tool_call
+from langgraph.types import Command, interrupt
+from tools.tool_exec import execute_tools
+
+
+# Define the state object for the agent graph
+class AgentGraphState(TypedDict):
+    user_query: str
+    retriever_response: list
+    insitu_response: list
+    fluid_sub_response: list
+    insitu_next: str
+    tool_calls: list
+    image_output: str
+
 
 class Agent:
-    def __init__(self, state: AgentGraphState, model=None, server=None,
-                 temperature=0, model_endpoint=None, stop=None, guided_json=None):
+    def __init__(
+        self,
+        state: AgentGraphState,
+        model=None,
+        temperature=0,
+        model_endpoint=None,
+        stop=None,
+        guided_json=None,
+    ):
         self.state = state
         self.model = model
-        self.server = server
         self.temperature = temperature
         self.model_endpoint = model_endpoint
         self.stop = stop
         self.guided_json = guided_json
-    
-    def get_llm(self, json_model=False):
-        assert self.server == 'ollama'
-        #OllamaJSONModel(model=self.model, temperature=self.temperature) if json_model else
-        return OllamaModel(model=self.model, temperature=self.temperature)
-    
+
+    def get_llm(self, model_name="gpt-4o"):
+        if model_name == "gpt-4o":
+            return GPTModel(model=self.model, temperature=self.temperature)
+        else:
+            return OllamaModel(model=self.model, temperature=self.temperature)
+
     def update_state(self, key, value):
-        self.state = {**self.state, key: value}
+        if isinstance(self.state.get(key), list):
+            self.state[key].append(value)
+        elif key == "insitu_next":
+            # TODO: Really bad here. Just get it working
+            self.state[key] = value
+        else:
+            self.state[key] = [value]
+
+    def pack_message(self, system_message, user_message):
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"user query: {user_message}"},
+        ]
+
+        return messages
+
 
 class RetrieverAgent(Agent):
-    def invoke(self, user_query, prompt=retriever_prompt_template):
+    def invoke(self, user_query):
 
-        # no parameter in prompt template
-        retriever_prompt = prompt
-
-        messages = [
-            {"role": "system", "content": retriever_prompt},
-            {"role": "user", "content": f"user query: {user_query}"}
-        ]
+        retriever_prompt = generate_retriever_sys_prompt()
+        messages = self.pack_message(retriever_prompt, user_query)
 
         llm = self.get_llm()
         ai_msg = llm.invoke(messages)
@@ -44,18 +77,15 @@ class RetrieverAgent(Agent):
         print(f"RetrieverAgent: {response}")
 
         self.update_state("retriever_response", response)
+        self.update_state("tool_calls", parse_tool_call(response))
         return self.state
-    
-class InsituAgent(Agent):
-    def invoke(self, user_query, retrieved_data=None):
-        retrieved_data = retrieved_data() if callable(retrieved_data) else retrieved_data
-        target_well = str(retrieved_data.content)
-        insitu_prompt = generate_insitu_sys_prompt(target_well)
 
-        messages = [
-            {"role": "system", "content": insitu_prompt},
-            {"role": "user", "content": f"user query: {user_query}"}
-        ]
+
+class InsituAgent(Agent):
+    def invoke(self, user_query):
+
+        insitu_prompt = generate_insitu_sys_prompt()
+        messages = self.pack_message(insitu_prompt, user_query)
 
         llm = self.get_llm()
         ai_msg = llm.invoke(messages)
@@ -67,51 +97,66 @@ class InsituAgent(Agent):
 
         r = parse_tool_call(response)
 
-
-        # for conditional edges
         if not r["tool_call"]:
-            self.update_state("conditional_response", ["end"])
-        elif r['tool_call']['name'] == "perform_fluid_substitution":
-            # update conditional based on response
-            self.update_state("conditional_response", ["fluid_sub_tool"] )
+            self.update_state("insitu_next", ["human_review"])
+
+        elif r["tool_call"]["name"] != "perform_fluid_substitution":
+            self.update_state("insitu_next", ["human_review"])
+            self.update_state("tool_calls", r)
         else:
-            self.update_state("conditional_response", ["vis_insitu_tool"])
-        
+            self.update_state("insitu_next", ["fluid_sub"])
+            self.update_state("tool_calls", r)
+
         return self.state
 
-class FluidSubstituteAgent(Agent):
-    def invoke(self, user_query, fluid_sub_well=None):
-        fluid_sub_well = fluid_sub_well() if callable(fluid_sub_well) else fluid_sub_well
-        
-        target_well = str(fluid_sub_well.content)
-        fluid_sub_prompt = generate_fluid_sub_sys_prompt(target_well)
 
-        messages = [
-            {"role": "system", "content": fluid_sub_prompt},
-            {"role": "user", "content": f"user query: {user_query}"}
-        ]
+class FluidSubstituteAgent(Agent):
+    def invoke(self, user_query):
+
+        fluid_sub_prompt = generate_fluid_sub_sys_prompt()
+        messages = self.pack_message(fluid_sub_prompt, user_query)
 
         llm = self.get_llm()
         ai_msg = llm.invoke(messages)
         response = ai_msg.content
 
+        r = parse_tool_call(response)
         print(f"FluidSubstituteAgent: {response}")
 
         self.update_state("fluid_sub_response", response)
+        self.update_state("tool_calls", r)
 
         return self.state
 
-class EndNodeAgent(Agent):
+
+class HumanReviewAgent(Agent):
+    def human_review_node(self):
+
+        human_review = interrupt(
+            {
+                "workflow": self.state["tool_calls"],
+            }
+        )
+
+        review_action = human_review["action"]
+        review_data = human_review.get("data")
+
+        if review_action == "continue":
+            return "continue", None
+
+        elif review_action == "reject":
+            return "feedback", review_data
+
     def invoke(self):
-        self.update_state("end_chain", "end_chain")
-        return self.state
+        route, msg = self.human_review_node()
+        if route == "continue":
+            tool_list = self.state["tool_calls"]
+            try:
+                image_name = execute_tools(tool_list)
+            except:
+                print(f"Warning: Execution fails ... {tool_list}")
+                image_name = None
+        else:
+            image_name = None
 
-def check_for_content(var):
-    if var:
-        try:
-            var = var.content
-            return var.content
-        except:
-            return var
-    else:
-        var
+        return Command(goto="end", update={"image_output": image_name})

@@ -1,4 +1,4 @@
-#__init__.py
+# __init__.py
 
 from .qi_tools import *
 from .qi_well import *

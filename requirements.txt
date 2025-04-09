@@ -1,0 +1,14 @@
+numpy
+matplotlib
+rockphypy
+welly
+scikit-learn
+uvicorn
+fastapi
+ollama
+langgraph
+semantic_router
+tokenizers
+websockets
+azure.identity
+openai

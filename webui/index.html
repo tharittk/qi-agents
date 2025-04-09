@@ -1,172 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="utf-8" />
     <title>&lt;/&gt; QI Agent</title>
     <meta name="viewport" content="initial-scale=1, width=device-width" />
     <script src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@mui/material@5.8.0/umd/material-ui.development.js"></script>
-
-    <script
-      src="https://unpkg.com/@babel/standalone@latest/babel.min.js"
-      crossorigin="anonymous"
-    ></script>
+    <script src="https://unpkg.com/@babel/standalone@latest/babel.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;600;700&display=swap"
-    />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/icon?family=Material+Icons"
-    />
-  </head>
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+</head>
 
-  <body>
+<body>
     <div id="root"></div>
     <script type="text/babel">
-      const {
-        colors,
-        CssBaseline,
-        ThemeProvider,
-        Typography,
-        TextField,
-        Container,
-        createTheme,
-        Box,
-        Skeleton,
-      } = MaterialUI;
+        const { CssBaseline, ThemeProvider, TextField, Container, createTheme, Box, Typography, Button } = MaterialUI;
 
-      const theme = createTheme({
-        palette: {
-          mode: "dark",
-        },
-      });
-      const WS = new WebSocket("ws://localhost:8000/ws");
+        const theme = createTheme({
+            palette: { mode: 'dark' }
+        });
+        const WS = new WebSocket("ws://localhost:8000/ws");
 
-      function App() {
-        const [response, setResponse] = React.useState("");
-        const [question, setQuestion] = React.useState("");
-        const [loading, setLoading] = React.useState(false);
+        function App() {
+            const [messages, setMessages] = React.useState([]);
+            const [input, setInput] = React.useState("");
+            const [awaitingApproval, setAwaitingApproval] = React.useState(false);
+            const [approvalContent, setApprovalContent] = React.useState("");
+            const [imageSrc, setImageSrc] = React.useState("");
+            const chatInputRef = React.useRef(null);
 
-        const [imageSrc, setImageSrc] = React.useState(""); // Track image source
+            React.useEffect(() => {
+                WS.onmessage = (event) => {
+                    const message = event.data;
+                    if (message.startsWith("> Review the following:")) {
+                        setApprovalContent(message.split(':').slice(1).join(':').trim());
+                        setAwaitingApproval(true);
+                    } else if (message.startsWith("data:image/png;base64,")) {
+                        setImageSrc(message);
+                    } else {
+                        setMessages((prev) => [...prev, { sender: 'agent', content: message }]);
+                    }
+                };
+            }, []);
 
-        React.useEffect(() => {
-          WS.onmessage = (event) => {
-            setLoading(false);
-            if (event.data.startsWith("data:image/png;base64,")) {
-              setImageSrc(event.data); // Set image source for WebSocket image
-            } else {
-              const formattedText = event.data.replace(/\n/g, "  \n");
-              setResponse(marked.parse(formattedText));
-            }
-          };
-        }, []);
-        return (
-          <Container maxWidth="lg">
-            <Box
-              sx={{
-                display: "flex",
-                flexDirection: "row",
-                gap: 2,
-                height: "80vh",
-              }}
-            >
-              {/* Left: Chat Panel */}
-              <Box sx={{ flex: 2 }}>
-                <Box sx={{ my: 4 }}>
-                  <Typography variant="h4" component="h1" gutterBottom>
-                    <p>&lt;/&gt;</p> QI Agent 💻
-                  </Typography>
-                  <TextField
-                    id="outlined-basic"
-                    label="Tell me the well name and what you want to do with it..."
-                    variant="outlined"
-                    style={{ width: "100%" }}
-                    value={question}
-                    disabled={loading}
-                    onChange={(e) => {
-                      setQuestion(e.target.value);
-                    }}
-                    onKeyUp={(e) => {
-                      setLoading(false);
-                      if (e.key === "Enter") {
-                        setResponse("");
-                        setLoading(true);
-                        WS.send(question);
-                      }
-                    }}
-                  />
-                </Box>
-                {!response && loading && (
-                  <>
-                    <Skeleton />
-                    <Skeleton animation="wave" />
-                    <Skeleton animation={false} />
-                  </>
-                )}
-                {response && (
-                  <Box
-                    sx={{
-                      backgroundColor: "#232324",
-                      color: "white",
-                      padding: "16px",
-                      borderRadius: "8px",
-                      mt: 2,
-                    }}
-                  >
-                    <Typography
-                      dangerouslySetInnerHTML={{ __html: response }}
-                    />
-                  </Box>
-                )}
-              </Box>
+            const handleSubmit = (e) => {
+                if (e.key === 'Enter' && input) {
+                    setMessages((prev) => [...prev, { sender: 'user', content: input }]);
+                    WS.send(input);
+                    setInput("");
+                }
+            };
 
-              {/* Right: Image Panel */}
-              <Box
-                sx={{
-                  flex: 1,
-                  border: "1px solid #444",
-                  borderRadius: "8px",
-                  padding: "16px",
-                  textAlign: "center",
-                  display: "flex",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  marginTop: "50px",
-                }}
-              >
-                {imageSrc ? (
-                  <img
-                    id="imageDisplay"
-                    src={imageSrc}
-                    alt="WebSocket Image"
-                    style={{
-                      maxWidth: "98%",
-                      maxHeight: "98%",
-                      objectFit: "contain",
-                    }}
-                  />
-                ) : (
-                  <Typography variant="h6" color="gray">
-                    Nothing to show yet...''
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-          </Container>
-        );
-      }
+            const handleApproval = () => {
+                WS.send("ok");
+                setMessages((prev) => [...prev, { sender: 'user', content: "ok" }, { sender: 'system', content: "Approval sent." }]);
+                setApprovalContent("");
+                setAwaitingApproval(false);
+            };
 
-      ReactDOM.createRoot(document.getElementById("root")).render(
-        <ThemeProvider theme={theme}>
-          <CssBaseline />
-          <App />
-        </ThemeProvider>
-      );
+            const handleRejection = () => {
+                WS.send("reject");
+                setMessages((prev) => [...prev, { sender: 'user', content: "reject" }, { sender: 'system', content: "Rejection sent." }]);
+                setApprovalContent("");
+                setAwaitingApproval(false);
+            };
+
+            return (
+                <ThemeProvider theme={theme}>
+                    <CssBaseline />
+                    <Container maxWidth="md">
+                        <Box sx={{ height: '80vh', display: 'flex', flexDirection: 'column', pt: 2 }}>
+                            <Typography variant="h4" gutterBottom>&lt;/&gt; QI Agent 💻</Typography>
+                            <Box sx={{ flexGrow: 1, overflowY: 'auto', mb: 2, border: '1px solid gray', borderRadius: '8px', p: 2 }}>
+                                {messages.map((msg, idx) => (
+                                    <Typography key={idx} sx={{ color: msg.sender === 'user' ? 'lightgreen' : msg.sender === 'agent' ? 'white' : 'orange' }}>
+                                        <strong>{msg.sender}:</strong> {msg.content}
+                                    </Typography>
+                                ))}
+                                {awaitingApproval && (
+                                    <Box sx={{ mt: 2 }}>
+                                        <Typography variant="h6">Review the following:</Typography>
+                                        <Typography sx={{ mb: 1 }}>{approvalContent}</Typography>
+                                        <Button variant="contained" onClick={handleApproval} sx={{ mr: 1 }}>Approve</Button>
+                                        <Button variant="outlined" color="error" onClick={handleRejection}>Reject</Button>
+                                    </Box>
+                                )}
+                                {imageSrc && (
+                                    <Box sx={{ mt: 2, textAlign: 'center' }}>
+                                        <Typography variant="h6">Generated Image:</Typography>
+                                        <img src={imageSrc} alt="Generated" style={{ maxWidth: '75%', borderRadius: '8px' }} />
+                                    </Box>
+                                )}
+                            </Box>
+                            <TextField
+                                placeholder="Type your message..."
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleSubmit}
+                                fullWidth
+                                inputRef={chatInputRef}
+                                disabled={awaitingApproval}
+                            />
+                        </Box>
+                    </Container>
+                </ThemeProvider>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     </script>
-  </body>
+</body>
+
 </html>
