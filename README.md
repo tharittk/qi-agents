@@ -1,5 +1,11 @@
 # Quantitative Interpretation with LLM Chat Interface
 
+<!-- ![User's request](./assets/chat-ui.png) -->
+<!-- ![Result](./assets/chat-ui-result.png) -->
+<img src="./assets/chat-ui.png" alt="Chat UI" width="500"/>
+<img src="./assets/chat-ui-result.png" alt="Chat UI Result" width="500"/>
+
+
 ## Features
 
 ### Quantitative Interpretation Logic
@@ -25,14 +31,14 @@
 │   ├── gpt_models.py               # GPT-4o via AzureOpenAI
 │   ├── prompts.py                  # Pre-filled system prompts
 ├── qi/                             #
-│   ├──qi_lang.py                   # Tool parsing
+│   ├──qi_lang.py                   # Helper functions
 │   ├──qi_tools.py                  # Business Logic
 │   ├──qi_well.py                   # Class wrapper for well (.las)
 ├── tools/                          #
-│   ├──tool_exec.py                 # Tool Exection after LLMs
+│   ├──tool_exec.py                 # Tool Exection after LLMs' output
 ├── webui/                          #
 │   ├── main.py                     #
-│   ├── index.html                  # Chat page
+│   ├── index.html                  #
 ├── data_server.py                  # 
 └── README.md                       # Project documentation (this file)
 ```
