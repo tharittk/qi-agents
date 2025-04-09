@@ -14,7 +14,6 @@
 
 ### Web UI
 
-- **TBC**
 
 ## Repository Structure
 
@@ -22,11 +21,11 @@
 ├── agent/                          #
 │   ├── agents.py                   # Agent class
 │   ├── graph.py                    # Execution graph
-│   ├── ollama_models.py            # Sending msg to local hosted model
+│   ├── ollama_models.py            # locally hosted model
+│   ├── gpt_models.py               # GPT-4o via AzureOpenAI
 │   ├── prompts.py                  # Pre-filled system prompts
 ├── qi/                             #
-│   ├──qi_dataloader.py             #
-│   ├──qi_lang.py                   # 
+│   ├──qi_lang.py                   # Tool parsing
 │   ├──qi_tools.py                  # Business Logic
 │   ├──qi_well.py                   # Class wrapper for well (.las)
 ├── tools/                          #
